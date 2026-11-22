@@ -587,11 +587,15 @@
         <div class="section-title">Movimientos Recientes</div>
         <div id="dashboard-recent-list" class="item-list"></div>
 
-        <div class="section-title">Respaldo Local</div>
+        <div class="section-title">Respaldo y Reportes</div>
         <div class="card">
           <p style="font-size: 0.8rem; color: var(--text-muted);">
-            Todos los datos se almacenan en este dispositivo. Exporta un archivo JSON periodicamente para resguardar tu historial.
+            Selecciona el periodo para exportar el reporte a Excel, o guarda un respaldo completo en JSON.
           </p>
+          <div class="utility-row" style="align-items: center;">
+            <input type="month" id="export-month" class="form-control" style="flex:1; padding: 6px 10px; font-size: 0.82rem;">
+            <button class="btn btn-primary btn-sm" style="flex:1" onclick="exportMonthlyCSV()">Exportar CSV</button>
+          </div>
           <div class="utility-row">
             <button class="btn btn-outline btn-sm" style="flex:1" onclick="exportBackup()">Exportar JSON</button>
             <button class="btn btn-outline btn-sm" style="flex:1" onclick="document.getElementById('import-file').click()">Importar JSON</button>
@@ -837,6 +841,7 @@
       document.getElementById('app-container').classList.remove('hidden');
       document.getElementById('header-ws-badge').textContent = ws === 'personal' ? 'ENTORNO PERSONAL' : 'ENTORNO NEGOCIO';
       document.getElementById('global-rate').value = state.globalRate;
+      document.getElementById('export-month').value = currentMonthKey();
       populateCategories();
       populateBudgetCategories();
       switchView('dashboard');
@@ -1196,7 +1201,6 @@
       const data = getWorkspaceData();
       const monthKey = currentMonthKey();
 
-      // Presupuestos
       document.getElementById('budget-list').innerHTML = data.budgets.length
         ? data.budgets.map(b => {
             const spent = data.transactions
@@ -1219,7 +1223,6 @@
           }).join('')
         : '<div class="empty-state">Define limites mensuales por categoria para controlar tus gastos.</div>';
 
-      // Metas
       document.getElementById('goal-list').innerHTML = data.goals.length
         ? data.goals.map(g => {
             const pct = Math.min(100, (g.savedUsd / g.targetUsd) * 100);
@@ -1271,6 +1274,79 @@
         }
       };
       reader.readAsText(file);
+    }
+
+    /* Exportacion a CSV compatible con Excel */
+    function csvEscape(val) {
+      const str = String(val === null || val === undefined ? '' : val);
+      return '"' + str.replace(/"/g, '""') + '"';
+    }
+
+    function exportMonthlyCSV() {
+      const data = getWorkspaceData();
+      const monthKey = document.getElementById('export-month').value || currentMonthKey();
+      const wsName = state.activeWorkspace === 'personal' ? 'Personal' : 'Negocio';
+      const monthTxs = data.transactions.filter(t => t.date.startsWith(monthKey));
+
+      let totalBalance = 0;
+      let monthIncome = 0;
+      let monthExpense = 0;
+
+      data.transactions.forEach(t => {
+        if (t.type === 'income') totalBalance += t.amountUsd;
+        else totalBalance -= t.amountUsd;
+      });
+
+      monthTxs.forEach(t => {
+        if (t.type === 'income') monthIncome += t.amountUsd;
+        else monthExpense += t.amountUsd;
+      });
+
+      const netMonth = monthIncome - monthExpense;
+      const totalCxC = data.debts.filter(d => d.type === 'cxc').reduce((s, d) => s + d.remainingUsd, 0);
+      const totalCxP = data.debts.filter(d => d.type === 'cxp').reduce((s, d) => s + d.remainingUsd, 0);
+
+      const rows = [
+        ['REPORTE FINANCIERO MENSUAL', wsName, 'Periodo:', monthKey],
+        ['Tasa Referencial (Bs/USD)', state.globalRate.toFixed(2)],
+        [],
+        ['RESUMEN DE BALANCES (USD)', 'Monto USD'],
+        ['Ingresos del Mes', monthIncome.toFixed(2)],
+        ['Gastos del Mes', monthExpense.toFixed(2)],
+        ['Flujo Neto del Mes', netMonth.toFixed(2)],
+        ['Balance Disponible Consolidado', totalBalance.toFixed(2)],
+        ['Total Cuentas por Cobrar', totalCxC.toFixed(2)],
+        ['Total Cuentas por Pagar', totalCxP.toFixed(2)],
+        [],
+        ['MOVIMIENTOS DEL MES'],
+        ['Fecha', 'Tipo', 'Categoria', 'Cuenta', 'Descripcion', 'Moneda', 'Monto Original', 'Tasa Aplicada', 'Monto USD']
+      ];
+
+      monthTxs.forEach(t => {
+        const fecha = new Date(t.date).toLocaleDateString('es-VE');
+        const tipo = t.type === 'income' ? 'Ingreso' : 'Gasto';
+        const tasa = t.currency === 'BS' && t.rate ? t.rate.toFixed(2) : 'N/A';
+        rows.push([
+          fecha,
+          tipo,
+          t.category,
+          t.account,
+          t.note,
+          t.currency,
+          Number(t.amountOriginal).toFixed(2),
+          tasa,
+          (t.type === 'income' ? '' : '-') + Number(t.amountUsd).toFixed(2)
+        ]);
+      });
+
+      const csvContent = '\uFEFF' + rows.map(r => r.map(csvEscape).join(',')).join('\r\n');
+      const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reporte-${state.activeWorkspace}-${monthKey}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     }
 
     /* Inicializacion y Service Worker */
